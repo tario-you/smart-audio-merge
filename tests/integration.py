@@ -93,6 +93,35 @@ for path, before in hashes.items():
     assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == before
 print('PASS: input hashes unchanged, including attempted source overwrite', flush=True)
 
+# Lyrics3 and ID3v1 tags sit after the last audio frame, and the MP3 decoder
+# reports that trailing block as one damaged packet. Every chapter of a real
+# 75-file audiobook carried one, so the first file ended the whole merge.
+tagged = TEST / 'trailing-tag.mp3'
+run([tool('ffmpeg'), '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=520:duration=3', '-c:a', 'libmp3lame', str(tagged)])
+lyrics3 = b'LYRICSBEGIN' + b'IND' + b'00002' + b'10' + b'LYR' + b'00000'
+with tagged.open('ab') as handle:
+    handle.write(lyrics3 + b'%06d' % len(lyrics3) + b'LYRICS200' + b'TAG' + b'Tagged tone'.ljust(125, b'\0'))
+strict = subprocess.run([tool('ffmpeg'), '-v', 'error', '-xerror', '-i', str(tagged), '-f', 'null', '-'], capture_output=True)
+assert strict.returncode != 0, 'the fixture no longer carries the damaged trailing packet'
+tagged_out = TEST / f'tagged-{time.time_ns()}.mp3'
+result = engine(['merge', '--keep-order', '--output', tagged_out, '--', tagged, files[0]])
+assert result.returncode == 0, result.stdout + result.stderr
+samples = decode(tagged_out)
+assert abs(len(samples) / 8000 - 4.2) < .15, len(samples) / 8000
+assert abs(frequency(samples, 1) - 520) < 5 and abs(frequency(samples, 3.5) - 300) < 5
+print('PASS: a trailing Lyrics3 and ID3v1 tag merges with all of its audio', flush=True)
+
+# Tolerating that tag must not hide a file that really loses audio.
+from audio import merge as merge_audio
+short_out = TEST / f'short-{time.time_ns()}.mp3'
+try:
+    merge_audio([{**probe(tagged), 'duration': 600.0}], short_out, lambda event: None)
+    raise AssertionError('a materially short decode was accepted')
+except RuntimeError as error:
+    assert 'could be read' in str(error), error
+assert not short_out.exists() and not list(TEST.glob('.smart-audio-merge-*'))
+print('PASS: a materially short decode still fails and leaves no output', flush=True)
+
 bad = TEST / 'broken.mp3'; bad.write_bytes(b'not audio')
 failed_out = TEST / 'must-not-exist.mp3'
 result = engine(['merge', '--output', failed_out, '--', files[0], bad])

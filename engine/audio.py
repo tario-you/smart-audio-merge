@@ -35,6 +35,18 @@ def cancelled(_signum, _frame):
     raise KeyboardInterrupt
 
 
+def details(text):
+    """Keep FFmpeg's own last words whole, so a message never starts mid-word."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return ' | '.join(lines[-3:])[-500:] or 'FFmpeg reported no details.'
+
+
+def clock(seconds):
+    seconds = max(0, round(seconds))
+    return (f'{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}' if seconds >= 3600
+            else f'{seconds // 60}:{seconds % 60:02d}')
+
+
 def probe(path):
     path = Path(path).expanduser().resolve(strict=True)
     if not path.is_file():
@@ -50,7 +62,7 @@ def probe(path):
             process.wait()
         CHILDREN.discard(process)
     if process.returncode:
-        raise ValueError(f'Cannot read audio from {path.name}: {stderr.strip()[-500:]}')
+        raise ValueError(f'Cannot read audio from {path.name}: {details(stderr)}')
     data = json.loads(stdout)
     streams = data.get('streams', [])
     if not streams:
@@ -109,7 +121,7 @@ def merge(items, output, emit):
                 for index, item in enumerate(items):
                     emit({'event': 'progress', 'fraction': index / len(items), 'message': f'Merging {index + 1} of {len(items)}: {item["name"]}'})
                     with tempfile.TemporaryFile() as decoder_errors:
-                        decoder = subprocess.Popen([ffmpeg, '-hide_banner', '-loglevel', 'error', '-xerror', '-nostdin',
+                        decoder = subprocess.Popen([ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin',
                             '-i', item['path'], '-map', '0:a:0', '-vn', '-sn', '-dn', '-ar', str(sample_rate), '-ac', str(channels),
                             '-c:a', 'pcm_f32le', '-f', 'f32le', '-threads', '2', 'pipe:1'], stdout=subprocess.PIPE, stderr=decoder_errors)
                         CHILDREN.add(decoder)
@@ -124,11 +136,20 @@ def merge(items, output, emit):
                                     emit({'event': 'progress', 'fraction': fraction, 'message': f'Merging {index + 1} of {len(items)}: {item["name"]}'})
                                     last_update = seconds
                             decoder.stdout.close()
-                            if decoder.wait() != 0 or count == 0:
-                                decoder_errors.seek(0)
-                                raise RuntimeError(f'Could not decode {item["name"]}: ' + decoder_errors.read().decode(errors='replace')[-600:])
+                            status = decoder.wait()
+                            decoded = count / (4 * sample_rate * channels)
+                            # Tags that trail the last audio frame, such as Lyrics3 and ID3v1,
+                            # reach the decoder as one damaged packet. Judge the audio that came
+                            # out, so a recoverable decoder complaint cannot fail a whole file.
+                            decoder_errors.seek(0)
+                            reported = details(decoder_errors.read().decode(errors='replace'))
+                            if status != 0 or count == 0:
+                                raise RuntimeError(f'Could not decode {item["name"]}: {reported}')
+                            if item['duration'] - decoded > max(2, item['duration'] * .01):
+                                raise RuntimeError(f'Only {clock(decoded)} of {clock(item["duration"])} could be read '
+                                                   f'from {item["name"]}: {reported}')
                             CHILDREN.discard(decoder)
-                            completed += count / (4 * sample_rate * channels)
+                            completed += decoded
                         finally:
                             if decoder.poll() is None:
                                 decoder.terminate()
@@ -155,6 +176,12 @@ def merge(items, output, emit):
                     raise OSError(code, os.strerror(code), str(output))
                 emit({'event': 'complete', 'output': str(output), 'duration': actual['duration']})
             finally:
+                # A failed file leaves the encoder waiting on its pipe, and the
+                # interpreter would report that broken pipe after the real reason.
+                try:
+                    encoder.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
                 stop_children()
 
 

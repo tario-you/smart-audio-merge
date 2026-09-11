@@ -67,6 +67,7 @@ Ordering is a filename and metadata heuristic. Review ambiguous titles before me
 - Encodes MP3 with LAME quality 2, M4A with AAC at 256 kb/s, FLAC with a lossless codec, and WAV as 24-bit PCM.
 - MP3 and M4A add one lossy encoding generation. FLAC and WAV avoid additional lossy compression; sample-rate conversion, downmixing, and output bit depth still apply.
 - Omits source tags, covers, and chapter markers from the merged output. Original files keep their metadata.
+- Accepts a trailing tag, such as Lyrics3 or ID3v1, that the MP3 decoder reports as one damaged packet after the last audio frame. Each file is measured instead: a file that yields more than one percent less audio than its own duration stops the merge and is named in the message.
 - Checks the output duration before publishing it with an atomic, exclusive rename. Existing destinations are preserved.
 - Removes temporary output on cancellation or handled errors. No background service or login item is installed.
 
@@ -84,7 +85,7 @@ The integration suite uses local FFmpeg and generated test tones:
 python3 tests/integration.py
 ```
 
-It verifies actual decoded segment order for mixed input formats and all four outputs, source-file hashes, existing-destination protection, invalid input, cancellation cleanup, and a 100-file merge. Each run stores its generated fixtures in a new ignored directory under `.test-artifacts/`.
+It verifies actual decoded segment order for mixed input formats and all four outputs, source-file hashes, existing-destination protection, an MP3 carrying a trailing Lyrics3 and ID3v1 tag, a materially short decode, invalid input, cancellation cleanup, and a 100-file merge. Each run stores its generated fixtures in a new ignored directory under `.test-artifacts/`.
 
 Initial verification on macOS 15.6 included:
 

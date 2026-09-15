@@ -61,12 +61,14 @@ Ordering is a filename and metadata heuristic. Review ambiguous titles before me
 ## Audio and file handling
 
 - Reads the first audio stream from each selected file. WAV, MP3, FLAC, and M4A input combinations are tested; other audio formats depend on the installed FFmpeg build.
-- Decodes each input sequentially and streams it into one encoder with bounded memory use.
-- Adds no silence, crossfades, or volume adjustments. Existing silence inside each input is retained.
+- Matching MP3 inputs saved as MP3 use a fast stream copy, preserving compressed audio without re-encoding. Sample rate and channel count must match. If copying reports an error or fails duration verification, the merge uses the conversion path.
+- Other combinations decode each input sequentially and stream it into one encoder with bounded memory use.
+- Adds no crossfades or volume adjustments. Existing silence is retained. MP3 stream copy retains per-track encoder padding, which can leave tiny gaps at joins; it is intended for chapter-style tracks rather than gapless music.
 - Converts mixed sample rates to a common rate. Multichannel audio is mixed to stereo; all-mono input stays mono.
 - Encodes MP3 with LAME quality 2, M4A with AAC at 256 kb/s, FLAC with a lossless codec, and WAV as 24-bit PCM.
-- MP3 and M4A add one lossy encoding generation. FLAC and WAV avoid additional lossy compression; sample-rate conversion, downmixing, and output bit depth still apply.
+- MP3 stream copy adds no lossy encoding generation. Converted MP3 and M4A add one lossy encoding generation. FLAC and WAV avoid additional lossy compression; sample-rate conversion, downmixing, and output bit depth still apply.
 - Omits source tags, covers, and chapter markers from the merged output. Original files keep their metadata.
+- Accepts a trailing tag, such as Lyrics3 or ID3v1, that the MP3 decoder reports as one damaged packet after the last audio frame. Each file is measured instead: a file that yields more than one percent less audio than its own duration stops the merge and is named in the message.
 - Checks the output duration before publishing it with an atomic, exclusive rename. Existing destinations are preserved.
 - Removes temporary output on cancellation or handled errors. No background service or login item is installed.
 
@@ -84,7 +86,7 @@ The integration suite uses local FFmpeg and generated test tones:
 python3 tests/integration.py
 ```
 
-It verifies actual decoded segment order for mixed input formats and all four outputs, source-file hashes, existing-destination protection, invalid input, cancellation cleanup, and a 100-file merge. Each run stores its generated fixtures in a new ignored directory under `.test-artifacts/`.
+It verifies actual decoded segment order for mixed input formats and all four outputs, source-file hashes, existing-destination protection, an MP3 carrying a trailing Lyrics3 and ID3v1 tag, a materially short decode, invalid input, cancellation cleanup, and a 100-file merge. Each run stores its generated fixtures in a new ignored directory under `.test-artifacts/`.
 
 Initial verification on macOS 15.6 included:
 
